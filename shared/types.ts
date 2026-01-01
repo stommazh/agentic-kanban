@@ -70,7 +70,7 @@ export type Image = { id: string, file_path: string, original_name: string, mime
 
 export type CreateImage = { file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, };
 
-export type Workspace = { id: string, task_id: string, container_ref: string | null, branch: string, agent_working_dir: string | null, setup_completed_at: string | null, created_at: string, updated_at: string, };
+export type Workspace = { id: string, task_id: string, container_ref: string | null, branch: string, agent_working_dir: string | null, git_provider: string | null, setup_completed_at: string | null, created_at: string, updated_at: string, };
 
 export type Session = { id: string, workspace_id: string, executor: string | null, created_at: string, updated_at: string, };
 
@@ -278,7 +278,7 @@ export type AttachPrResponse = { pr_attached: boolean, pr_url: string | null, pr
 
 export type AttachExistingPrRequest = { repo_id: string, };
 
-export type PrCommentsResponse = { comments: Array<UnifiedPrComment>, };
+export type PrCommentsResponse = { comments: Array<UnifiedComment>, };
 
 export type GetPrCommentsError = { "type": "no_pr_attached" } | { "type": "github_cli_not_installed" } | { "type": "github_cli_not_logged_in" };
 
@@ -504,4 +504,4 @@ Analyze the changes in this branch and write:
    - Any important implementation details
    - At the end, include a note: "This PR was written using [Vibe Kanban](https://vibekanban.com)"
 
-Use \`gh pr edit\` to update the PR.`;
+Use \`gh pr edit\` to update the PR.`;export type UnifiedComment = UnifiedPrComment;

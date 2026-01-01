@@ -21,6 +21,7 @@ import { TaskWithAttemptStatus, Workspace } from 'shared/types';
 import { Loader2 } from 'lucide-react';
 import NiceModal, { useModal } from '@ebay/nice-modal-react';
 import { useAuth, useRepoBranches } from '@/hooks';
+import { useGitProvider } from '@/hooks/useGitProvider';
 import {
   GhCliHelpInstructions,
   GhCliSetupDialog,
@@ -47,6 +48,7 @@ const CreatePRDialogImpl = NiceModal.create<CreatePRDialogProps>(
     const { t } = useTranslation('tasks');
     const { isLoaded } = useAuth();
     const { environment, config } = useUserSystem();
+    const { terminology } = useGitProvider(attempt);
     const [prTitle, setPrTitle] = useState('');
     const [prBody, setPrBody] = useState('');
     const [prBaseBranch, setPrBaseBranch] = useState('');
@@ -248,9 +250,9 @@ const CreatePRDialogImpl = NiceModal.create<CreatePRDialogProps>(
         >
           <DialogContent className="sm:max-w-[525px]">
             <DialogHeader>
-              <DialogTitle>{t('createPrDialog.title')}</DialogTitle>
+              <DialogTitle>Create {terminology.pr}</DialogTitle>
               <DialogDescription>
-                {t('createPrDialog.description')}
+                Push your changes and create a {terminology.prShort}
               </DialogDescription>
             </DialogHeader>
             {!isLoaded ? (

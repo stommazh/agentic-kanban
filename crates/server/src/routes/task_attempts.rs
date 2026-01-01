@@ -2,6 +2,7 @@ pub mod codex_setup;
 pub mod cursor_setup;
 pub mod gh_cli_setup;
 pub mod images;
+pub mod mr;
 pub mod pr;
 pub mod util;
 
@@ -1492,9 +1493,14 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/push/force", post(force_push_task_attempt_branch))
         .route("/rebase", post(rebase_task_attempt))
         .route("/conflicts/abort", post(abort_conflicts_task_attempt))
+        // Backwards-compatible PR routes (GitHub-specific naming)
         .route("/pr", post(pr::create_github_pr))
         .route("/pr/attach", post(pr::attach_existing_pr))
         .route("/pr/comments", get(pr::get_pr_comments))
+        // New unified MR routes (provider-agnostic)
+        .route("/merge-request", post(mr::create_github_pr))
+        .route("/merge-request/attach", post(mr::attach_existing_pr))
+        .route("/merge-request/comments", get(mr::get_pr_comments))
         .route("/open-editor", post(open_task_attempt_in_editor))
         .route("/children", get(get_task_attempt_children))
         .route("/stop", post(stop_task_attempt_execution))

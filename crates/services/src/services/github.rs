@@ -10,10 +10,9 @@ use tokio::task;
 use tracing::info;
 use ts_rs::TS;
 
-mod cli;
+pub mod cli;
 
-use cli::{GhCli, GhCliError, PrComment, PrReviewComment};
-pub use cli::{PrCommentAuthor, ReviewCommentUser};
+pub use cli::{GhCli, GhCliError, PrComment, PrReviewComment, PrCommentAuthor, ReviewCommentUser};
 
 /// Unified PR comment that can be either a general comment or review comment
 #[derive(Debug, Clone, Serialize, TS)]

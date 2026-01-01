@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use services::services::{
     container::ContainerService,
     git::{GitCliError, GitServiceError},
-    github::{CreatePrRequest, GitHubService, GitHubServiceError, UnifiedPrComment},
+    git_provider::{self, CreateMrRequest, ProviderError, UnifiedComment},
 };
 use ts_rs::TS;
 use utils::response::ApiResponse;
@@ -69,7 +69,7 @@ pub struct AttachExistingPrRequest {
 
 #[derive(Debug, Serialize, TS)]
 pub struct PrCommentsResponse {
-    pub comments: Vec<UnifiedPrComment>,
+    pub comments: Vec<UnifiedComment>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -278,20 +278,22 @@ pub async fn create_github_pr(
     } else {
         target_branch
     };
-    // Create the PR using GitHub service
-    let pr_request = CreatePrRequest {
+    // Create the PR using provider abstraction
+    let pr_request = CreateMrRequest {
         title: request.title.clone(),
         body: request.body.clone(),
         head_branch: workspace.branch.clone(),
         base_branch: norm_target_branch_name.clone(),
         draft: request.draft,
     };
-    // Use GitService to get the remote URL, then create GitHubRepoInfo
-    let repo_info = deployment.git().get_github_repo_info(&repo_path)?;
 
-    // Use GitHubService to create the PR
-    let github_service = GitHubService::new()?;
-    match github_service.create_pr(&repo_info, &pr_request).await {
+    // Detect provider and create appropriate service
+    let provider = git_provider::create_provider(&repo_path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
+    let (_, repo_id) = git_provider::detect_provider(&repo_path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
+
+    match provider.create_merge_request(&repo_id, &pr_request).await {
         Ok(pr_info) => {
             // Update the workspace with PR information
             if let Err(e) = Merge::create_pr(
@@ -299,7 +301,7 @@ pub async fn create_github_pr(
                 workspace.id,
                 workspace_repo.repo_id,
                 &norm_target_branch_name,
-                pr_info.number,
+                pr_info.number as i64,
                 &pr_info.url,
             )
             .await
@@ -325,7 +327,7 @@ pub async fn create_github_pr(
                 && let Err(e) = trigger_pr_description_follow_up(
                     &deployment,
                     &workspace,
-                    pr_info.number,
+                    pr_info.number as i64,
                     &pr_info.url,
                 )
                 .await
@@ -341,18 +343,18 @@ pub async fn create_github_pr(
         }
         Err(e) => {
             tracing::error!(
-                "Failed to create GitHub PR for attempt {}: {}",
+                "Failed to create PR for attempt {}: {}",
                 workspace.id,
                 e
             );
             match &e {
-                GitHubServiceError::GhCliNotInstalled(_) => Ok(ResponseJson(
+                ProviderError::NotInstalled { .. } => Ok(ResponseJson(
                     ApiResponse::error_with_data(CreatePrError::GithubCliNotInstalled),
                 )),
-                GitHubServiceError::AuthFailed(_) => Ok(ResponseJson(
+                ProviderError::NotAuthenticated(_) => Ok(ResponseJson(
                     ApiResponse::error_with_data(CreatePrError::GithubCliNotLoggedIn),
                 )),
-                _ => Err(ApiError::GitHubService(e)),
+                _ => Err(ApiError::GitService(GitServiceError::InvalidRepository(e.to_string()))),
             }
         }
     }
@@ -390,13 +392,17 @@ pub async fn attach_existing_pr(
         })));
     }
 
-    let github_service = GitHubService::new()?;
-    let repo_info = deployment.git().get_github_repo_info(&repo.path)?;
+    // Detect provider and create appropriate service
+    let provider = git_provider::create_provider(&repo.path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
+    let (_, repo_id) = git_provider::detect_provider(&repo.path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
 
     // List all PRs for branch (open, closed, and merged)
-    let prs = github_service
-        .list_all_prs_for_branch(&repo_info, &workspace.branch)
-        .await?;
+    let prs = provider
+        .list_mrs_for_branch(&repo_id, &workspace.branch)
+        .await
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
 
     // Take the first PR (prefer open, but also accept merged/closed)
     if let Some(pr_info) = prs.into_iter().next() {
@@ -406,24 +412,27 @@ pub async fn attach_existing_pr(
             workspace.id,
             workspace_repo.repo_id,
             &workspace_repo.target_branch,
-            pr_info.number,
+            pr_info.number as i64,
             &pr_info.url,
         )
         .await?;
 
+        // Convert PrState to MergeStatus
+        let merge_status: MergeStatus = pr_info.state.into();
+
         // Update status if not open
-        if !matches!(pr_info.status, MergeStatus::Open) {
+        if !matches!(merge_status, MergeStatus::Open) {
             Merge::update_status(
                 pool,
                 merge.id,
-                pr_info.status.clone(),
+                merge_status.clone(),
                 pr_info.merge_commit_sha.clone(),
             )
             .await?;
         }
 
         // If PR is merged, mark task as done
-        if matches!(pr_info.status, MergeStatus::Merged) {
+        if matches!(merge_status, MergeStatus::Merged) {
             Task::update_status(pool, task.id, TaskStatus::Done).await?;
 
             // Try broadcast update to other users in organization
@@ -446,8 +455,8 @@ pub async fn attach_existing_pr(
         Ok(ResponseJson(ApiResponse::success(AttachPrResponse {
             pr_attached: true,
             pr_url: Some(pr_info.url),
-            pr_number: Some(pr_info.number),
-            pr_status: Some(pr_info.status),
+            pr_number: Some(pr_info.number as i64),
+            pr_status: Some(merge_status),
         })))
     } else {
         Ok(ResponseJson(ApiResponse::success(AttachPrResponse {
@@ -489,12 +498,15 @@ pub async fn get_pr_comments(
         }
     };
 
-    let github_service = GitHubService::new()?;
-    let repo_info = deployment.git().get_github_repo_info(&repo.path)?;
+    // Detect provider and create appropriate service
+    let provider = git_provider::create_provider(&repo.path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
+    let (_, repo_id) = git_provider::detect_provider(&repo.path)
+        .map_err(|e| ApiError::GitService(GitServiceError::InvalidRepository(e.to_string())))?;
 
-    // Fetch comments from GitHub
-    match github_service
-        .get_pr_comments(&repo_info, pr_info.number)
+    // Fetch comments from provider
+    match provider
+        .get_comments(&repo_id, pr_info.number as u64)
         .await
     {
         Ok(comments) => Ok(ResponseJson(ApiResponse::success(PrCommentsResponse {
@@ -508,13 +520,13 @@ pub async fn get_pr_comments(
                 e
             );
             match &e {
-                GitHubServiceError::GhCliNotInstalled(_) => Ok(ResponseJson(
+                ProviderError::NotInstalled { .. } => Ok(ResponseJson(
                     ApiResponse::error_with_data(GetPrCommentsError::GithubCliNotInstalled),
                 )),
-                GitHubServiceError::AuthFailed(_) => Ok(ResponseJson(
+                ProviderError::NotAuthenticated(_) => Ok(ResponseJson(
                     ApiResponse::error_with_data(GetPrCommentsError::GithubCliNotLoggedIn),
                 )),
-                _ => Err(ApiError::GitHubService(e)),
+                _ => Err(ApiError::GitService(GitServiceError::InvalidRepository(e.to_string()))),
             }
         }
     }
