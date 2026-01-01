@@ -93,7 +93,14 @@ fn parse_gitlab_url(url: &str) -> Option<RepoIdentifier> {
 
     // GitLab supports nested groups: group/subgroup/project
     // For simplicity, treat everything before last segment as "owner"
-    let re = Regex::new(r"(?:gitlab[^/]*)[:/](?P<path>.+?)(?:\.git)?(?:/|$)").ok()?;
+    // Pattern handles:
+    // - git@gitlab.com:group/project (SSH with colon)
+    // - https://gitlab.com/group/project (HTTPS with slash after domain)
+    // - https://gitlab.internal:8443/team/project (HTTPS with port)
+    // - gitlab.example.com variants
+    // Use greedy (.+) to capture full path, then trim trailing slash if present
+    // Optional port (?::\d+)? handles URLs like gitlab.internal:8443
+    let re = Regex::new(r"gitlab[^/:]*(?::\d+)?[:/](?P<path>.+?)(?:\.git)?$").ok()?;
     let caps = re.captures(url)?;
     let path = caps.name("path")?.as_str();
 
