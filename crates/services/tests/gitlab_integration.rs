@@ -3,10 +3,9 @@
 //! End-to-end tests for GitLab MR creation and management workflows
 
 use services::services::git_provider::{
-    create_provider, create_provider_by_type, detect_provider_from_url, CreateMrRequest,
-    GitLabProvider, GitProvider, ProviderError, ProviderType, RepoIdentifier,
+    create_provider_by_type, detect_provider_from_url, CreateMrRequest, GitLabProvider,
+    GitProvider, ProviderError, ProviderType, RepoIdentifier,
 };
-use std::path::Path;
 
 /// Test provider creation from type
 #[test]
@@ -187,7 +186,6 @@ fn test_self_hosted_gitlab_config() {
     // Set environment variables for self-hosted instance
     unsafe {
         std::env::set_var("GITLAB_BASE_URL", "https://gitlab.company.com");
-        std::env::set_var("GITLAB_TOKEN", "test-token-123");
     }
 
     let provider = GitLabProvider::new();
@@ -196,7 +194,6 @@ fn test_self_hosted_gitlab_config() {
     // Clean up
     unsafe {
         std::env::remove_var("GITLAB_BASE_URL");
-        std::env::remove_var("GITLAB_TOKEN");
     }
 }
 

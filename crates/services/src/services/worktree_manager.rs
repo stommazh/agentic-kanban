@@ -187,7 +187,57 @@ impl WorktreeManager {
         git_repo_path: &Path,
         worktree_path: &Path,
     ) -> Result<Option<String>, WorktreeError> {
-        let worktree_metadata_path = git_repo_path.join(".git").join("worktrees");
+        // Resolve the actual .git directory (handles gitlink files for submodules)
+        let git_path = git_repo_path.join(".git");
+        let actual_git_dir = if git_path.is_file() {
+            // This is a gitlink file (submodule or worktree)
+            // Read the file to get the actual git directory path
+            let content = fs::read_to_string(&git_path).map_err(|e| {
+                WorktreeError::Repository(format!(
+                    "Failed to read gitlink file at {}: {}",
+                    git_path.display(),
+                    e
+                ))
+            })?;
+            // Parse "gitdir: <path>"
+            let gitdir_line = content.trim();
+            if let Some(path_str) = gitdir_line.strip_prefix("gitdir:") {
+                let path_str = path_str.trim();
+                let gitdir_path = if Path::new(path_str).is_absolute() {
+                    PathBuf::from(path_str)
+                } else {
+                    // Relative path - resolve from git_repo_path
+                    git_repo_path.join(path_str).canonicalize().map_err(|e| {
+                        WorktreeError::Repository(format!(
+                            "Failed to resolve gitlink path '{}': {}",
+                            path_str, e
+                        ))
+                    })?
+                };
+                gitdir_path
+            } else {
+                return Err(WorktreeError::Repository(format!(
+                    "Invalid gitlink file format at {}: {}",
+                    git_path.display(),
+                    gitdir_line
+                )));
+            }
+        } else if git_path.is_dir() {
+            git_path
+        } else {
+            return Err(WorktreeError::Repository(format!(
+                ".git not found at {}",
+                git_path.display()
+            )));
+        };
+
+        let worktree_metadata_path = actual_git_dir.join("worktrees");
+        
+        // If worktrees directory doesn't exist, there are no worktrees
+        if !worktree_metadata_path.exists() || !worktree_metadata_path.is_dir() {
+            return Ok(None);
+        }
+
         let worktree_metadata_folders = fs::read_dir(&worktree_metadata_path)
             .map_err(|e| {
                 WorktreeError::Repository(format!(
@@ -379,10 +429,9 @@ impl WorktreeManager {
         if let Some(worktree_name) =
             Self::find_worktree_git_internal_name(git_repo_path, worktree_path)?
         {
-            let git_worktree_metadata_path = git_repo_path
-                .join(".git")
-                .join("worktrees")
-                .join(worktree_name);
+            // Resolve the actual git directory (handles gitlink files)
+            let actual_git_dir = Self::resolve_git_dir(git_repo_path)?;
+            let git_worktree_metadata_path = actual_git_dir.join("worktrees").join(worktree_name);
 
             if git_worktree_metadata_path.exists() {
                 debug!(
@@ -394,6 +443,47 @@ impl WorktreeManager {
         }
 
         Ok(())
+    }
+
+    /// Resolve the actual .git directory (handles gitlink files for submodules)
+    fn resolve_git_dir(git_repo_path: &Path) -> Result<PathBuf, WorktreeError> {
+        let git_path = git_repo_path.join(".git");
+        if git_path.is_file() {
+            // This is a gitlink file (submodule or worktree)
+            let content = fs::read_to_string(&git_path).map_err(|e| {
+                WorktreeError::Repository(format!(
+                    "Failed to read gitlink file at {}: {}",
+                    git_path.display(),
+                    e
+                ))
+            })?;
+            let gitdir_line = content.trim();
+            if let Some(path_str) = gitdir_line.strip_prefix("gitdir:") {
+                let path_str = path_str.trim();
+                if Path::new(path_str).is_absolute() {
+                    Ok(PathBuf::from(path_str))
+                } else {
+                    git_repo_path.join(path_str).canonicalize().map_err(|e| {
+                        WorktreeError::Repository(format!(
+                            "Failed to resolve gitlink path '{}': {}",
+                            path_str, e
+                        ))
+                    })
+                }
+            } else {
+                Err(WorktreeError::Repository(format!(
+                    "Invalid gitlink file format at {}",
+                    git_path.display()
+                )))
+            }
+        } else if git_path.is_dir() {
+            Ok(git_path)
+        } else {
+            Err(WorktreeError::Repository(format!(
+                ".git not found at {}",
+                git_path.display()
+            )))
+        }
     }
 
     /// Clean up multiple worktrees
